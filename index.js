@@ -1,45 +1,8 @@
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
+const { getLanguageFromPhone, getTranslation, getCountryFromPhone } = require('./phone-utils');
 
-// Хранилище для обработки команд
-const commandHandlers = {
-  '/start': async (msg) => {
-    await msg.reply('👋 Привет! Я ваш WhatsApp бот. Введите /help для списка команд.');
-  },
-  
-  '/help': async (msg) => {
-    const helpText = `📋 Доступные команды:
-/start - Начать работу с ботом
-/help - Показать справку
-/status - Проверить состояние бота
-/time - Текущее время
-
-Просто напишите мне любое сообщение, и я отвечу!`;
-    await msg.reply(helpText);
-  },
-  
-  '/status': async (msg) => {
-    try {
-      const info = await msg.getChat();
-      await msg.reply(`✅ Бот работает! Статус: готов к работе\n\nЧат: ${info.name || info.id.user}`);
-    } catch (error) {
-      console.error('Ошибка проверки статуса:', error);
-      await msg.reply('✅ Бот работает!');
-    }
-  },
-  
-  '/time': async (msg) => {
-    const now = new Date();
-    const timeString = now.toLocaleString('ru-RU', { 
-      timeZone: 'Europe/Moscow',
-      dateStyle: 'full',
-      timeStyle: 'long'
-    });
-    await msg.reply(`🕐 Текущее время: ${timeString}`);
-  },
-};
-
-// Создание клиента WhatsApp
+// Создание клиента WhatsApp (нужно для safeReply)
 const client = new Client({
   authStrategy: new LocalAuth({
     dataPath: './.wwebjs_auth'
@@ -49,6 +12,110 @@ const client = new Client({
     args: ['--no-sandbox', '--disable-setuid-sandbox']
   }
 });
+
+// Безопасная функция для отправки сообщений (обрабатывает разные форматы ID)
+async function safeReply(msg, text) {
+  // Проверяем, не является ли это каналом
+  if (msg.from && msg.from.includes('@lid')) {
+    console.log('⚠️ Попытка отправить сообщение в канал - не поддерживается');
+    return; // Просто выходим, не пытаемся отправлять
+  }
+
+  try {
+    // Пробуем обычный reply
+    await msg.reply(text);
+  } catch (error) {
+    // Если это ошибка с каналом, просто пропускаем
+    if (msg.from && msg.from.includes('@lid')) {
+      console.log('⚠️ Канал не поддерживается для отправки сообщений');
+      return;
+    }
+    
+    // Если reply не работает, используем sendMessage напрямую
+    console.log('⚠️ msg.reply() не сработал, используем client.sendMessage()');
+    try {
+      await client.sendMessage(msg.from, text);
+    } catch (sendError) {
+      // Если ошибка связана с каналом, просто логируем
+      if (msg.from && msg.from.includes('@lid')) {
+        console.log('⚠️ Канал не поддерживается для отправки сообщений');
+        return;
+      }
+      console.error('❌ Ошибка отправки через sendMessage:', sendError);
+      throw sendError;
+    }
+  }
+}
+
+// Хранилище для обработки команд (теперь с поддержкой языков)
+const commandHandlers = {
+  '/start': async (msg, language) => {
+    const text = getTranslation(language, 'start');
+    await safeReply(msg, text);
+  },
+  
+  '/help': async (msg, language) => {
+    const text = getTranslation(language, 'help');
+    await safeReply(msg, text);
+  },
+  
+  '/status': async (msg, language) => {
+    try {
+      const info = await msg.getChat();
+      const statusText = getTranslation(language, 'status');
+      await safeReply(msg, `${statusText}\n\nЧат: ${info.name || info.id.user || msg.from}`);
+    } catch (error) {
+      console.error('Ошибка проверки статуса:', error);
+      const statusText = getTranslation(language, 'status');
+      await safeReply(msg, statusText);
+    }
+  },
+  
+  '/time': async (msg, language) => {
+    try {
+      const now = new Date();
+      // Определяем часовой пояс по стране
+      const country = getCountryFromPhone(msg.from);
+      const timeZone = getTimeZoneByCountry(country);
+      
+      const timeString = now.toLocaleString(language === 'ru' ? 'ru-RU' : language === 'es' ? 'es-ES' : 'en-US', { 
+        timeZone: timeZone,
+        dateStyle: 'full',
+        timeStyle: 'long'
+      });
+      
+      const timeText = getTranslation(language, 'time');
+      const response = `${timeText} ${timeString}`;
+      
+      // Используем безопасный метод отправки
+      await safeReply(msg, response);
+    } catch (error) {
+      console.error('Ошибка в команде /time:', error);
+      throw error;
+    }
+  },
+};
+
+// Функция для определения часового пояса по стране
+function getTimeZoneByCountry(countryCode) {
+  const timeZones = {
+    'RU': 'Europe/Moscow',
+    'KZ': 'Asia/Almaty',
+    'BY': 'Europe/Minsk',
+    'UA': 'Europe/Kyiv',
+    'ES': 'Europe/Madrid',
+    'MX': 'America/Mexico_City',
+    'AR': 'America/Argentina/Buenos_Aires',
+    'US': 'America/New_York',
+    'GB': 'Europe/London',
+    'DE': 'Europe/Berlin',
+    'FR': 'Europe/Paris',
+    'IT': 'Europe/Rome',
+    // Добавьте больше по необходимости
+  };
+  
+  return timeZones[countryCode] || 'UTC';
+}
 
 // Обработка QR-кода для авторизации
 client.on('qr', (qr) => {
@@ -85,33 +152,54 @@ client.on('message', async (msg) => {
       return;
     }
 
+    // Пропускаем каналы (@lid) - whatsapp-web.js не поддерживает отправку в каналы
+    if (msg.from.includes('@lid')) {
+      console.log(`⚠️ Пропущено сообщение из канала (не поддерживается): ${msg.from}`);
+      return;
+    }
+
     const messageText = msg.body.trim();
     const chatId = msg.from;
     
-    console.log(`📨 Получено сообщение от ${chatId}: ${messageText}`);
+    // Определяем язык пользователя по номеру телефона
+    const userLanguage = getLanguageFromPhone(chatId);
+    const userCountry = getCountryFromPhone(chatId);
+    
+    console.log(`📨 Получено сообщение от ${chatId} (${userCountry || 'неизвестно'}, язык: ${userLanguage}): ${messageText}`);
 
     // Проверяем, является ли сообщение командой
     const trimmedMessage = messageText.toLowerCase();
     
     if (commandHandlers[trimmedMessage]) {
-      // Выполняем команду
-      console.log(`⚡ Выполнение команды: ${trimmedMessage}`);
-      await commandHandlers[trimmedMessage](msg);
+      // Выполняем команду с учетом языка пользователя
+      console.log(`⚡ Выполнение команды: ${trimmedMessage} (язык: ${userLanguage})`);
+      await commandHandlers[trimmedMessage](msg, userLanguage);
       console.log(`✅ Команда ${trimmedMessage} выполнена успешно`);
     } else {
-      // Эхо-ответ
-      console.log(`📤 Отправка эхо-ответа на ${chatId}`);
-      const response = `Вы написали: "${messageText}"\n\nИспользуйте /help для списка команд.`;
-      await msg.reply(response);
+      // Эхо-ответ на языке пользователя
+      console.log(`📤 Отправка эхо-ответа на ${chatId} (язык: ${userLanguage})`);
+      const echoText = getTranslation(userLanguage, 'echo');
+      const useHelpText = getTranslation(userLanguage, 'useHelp');
+      const response = `${echoText} "${messageText}"\n\n${useHelpText}`;
+      await safeReply(msg, response);
       console.log(`✅ Сообщение отправлено успешно`);
     }
   } catch (error) {
     console.error('❌ Ошибка обработки сообщения:', error);
     
     try {
-      await msg.reply('❌ Произошла ошибка при обработке сообщения. Попробуйте еще раз.');
+      // Определяем язык для сообщения об ошибке
+      const userLanguage = getLanguageFromPhone(msg.from);
+      const errorText = getTranslation(userLanguage, 'error');
+      await safeReply(msg, errorText);
     } catch (replyError) {
       console.error('❌ Ошибка отправки ответа об ошибке:', replyError);
+      // Последняя попытка - через client.sendMessage напрямую
+      try {
+        await client.sendMessage(msg.from, '❌ Произошла ошибка. Попробуйте позже.');
+      } catch (finalError) {
+        console.error('❌ Критическая ошибка отправки сообщения:', finalError);
+      }
     }
   }
 });
