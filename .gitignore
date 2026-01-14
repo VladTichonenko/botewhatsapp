@@ -4,3 +4,5 @@ node_modules/
 *.log
 .vscode/
 .idea/
+.wwebjs_auth/
+.wwebjs_cache/
