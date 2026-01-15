@@ -2,76 +2,127 @@ const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const { getLanguageFromPhone, getTranslation, getCountryFromPhone } = require('./phone-utils');
 
-// Создание клиента WhatsApp (нужно для safeReply)
-const client = new Client({
-  authStrategy: new LocalAuth({
-    dataPath: './.wwebjs_auth'
-  }),
-  puppeteer: {
-    headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox']
-  }
-});
-
-// Безопасная функция для отправки сообщений (обрабатывает разные форматы ID)
-async function safeReply(msg, text) {
-  // Проверяем, не является ли это каналом
-  if (msg.from && msg.from.includes('@lid')) {
-    console.log('⚠️ Попытка отправить сообщение в канал - не поддерживается');
-    return; // Просто выходим, не пытаемся отправлять
-  }
-
+// Безопасная отправка сообщений с обработкой ошибок markedUnread
+async function sendMessageSafely(msg, text, client) {
+  const chatId = msg.from;
+  
+  // Функция для проверки, является ли ошибка связанной с markedUnread
+  const isMarkedUnreadError = (error) => {
+    const errorStr = error.message || error.toString() || '';
+    return errorStr.includes('markedUnread') || 
+           errorStr.includes('sendSeen') ||
+           errorStr.includes('Cannot read properties of undefined');
+  };
+  
+  // Метод 1: Пробуем отправить через chat.sendMessage (не вызывает sendSeen автоматически)
   try {
-    // Пробуем обычный reply
-    await msg.reply(text);
-  } catch (error) {
-    // Если это ошибка с каналом, просто пропускаем
-    if (msg.from && msg.from.includes('@lid')) {
-      console.log('⚠️ Канал не поддерживается для отправки сообщений');
-      return;
+    const chat = await msg.getChat();
+    await chat.sendMessage(text);
+    return; // Успешно отправлено
+  } catch (chatError) {
+    if (!isMarkedUnreadError(chatError)) {
+      console.error('❌ Ошибка отправки через chat.sendMessage:', chatError.message);
     }
+  }
+  
+  // Метод 2: Пробуем прямой sendMessage с отключенной отметкой как прочитанное
+  try {
+    await client.sendMessage(chatId, text, { sendSeen: false });
+    return; // Успешно отправлено
+  } catch (sendError) {
+    if (isMarkedUnreadError(sendError)) {
+      console.log('⚠️ Обнаружена ошибка markedUnread при sendMessage, пробую альтернативный метод...');
+    } else {
+      console.error('❌ Ошибка отправки через sendMessage:', sendError.message);
+    }
+  }
+  
+  // Метод 3: Пробуем reply (может работать, если markedUnread уже обработан)
+  try {
+    await msg.reply(text);
+    return; // Успешно отправлено
+  } catch (replyError) {
+    if (isMarkedUnreadError(replyError)) {
+      console.log('⚠️ Обнаружена ошибка markedUnread при reply, пробую последний метод...');
+    } else {
+      console.error('❌ Ошибка отправки через reply:', replyError.message);
+    }
+  }
+  
+  // Метод 4: Последняя попытка - отправка с задержкой (иногда помогает)
+  try {
+    console.log('⏳ Последняя попытка отправки с задержкой...');
+    await new Promise(resolve => setTimeout(resolve, 2000)); // Ждем 2 секунды
     
-    // Если reply не работает, используем sendMessage напрямую
-    console.log('⚠️ msg.reply() не сработал, используем client.sendMessage()');
-    try {
-      await client.sendMessage(msg.from, text);
-    } catch (sendError) {
-      // Если ошибка связана с каналом, просто логируем
-      if (msg.from && msg.from.includes('@lid')) {
-        console.log('⚠️ Канал не поддерживается для отправки сообщений');
-        return;
-      }
-      console.error('❌ Ошибка отправки через sendMessage:', sendError);
-      throw sendError;
+    // Пробуем через chat.sendMessage еще раз
+    const chat = await msg.getChat();
+    await chat.sendMessage(text);
+    console.log('✅ Сообщение отправлено после задержки');
+    return;
+  } catch (finalError) {
+    // Если все методы не сработали, но ошибка связана с markedUnread - сообщение может быть отправлено
+    if (isMarkedUnreadError(finalError)) {
+      console.log('⚠️ Ошибка markedUnread, но сообщение может быть отправлено');
+      console.log('💡 Это известный баг whatsapp-web.js, сообщение обычно доставляется');
+      // Не бросаем ошибку, так как сообщение может быть отправлено
+      return;
+    } else {
+      console.error('❌ Все методы отправки не сработали:', finalError.message);
+      throw finalError;
     }
   }
 }
 
+// Создание клиента WhatsApp
+const client = new Client({
+  authStrategy: new LocalAuth({
+    dataPath: './.wwebjs_auth',
+    clientId: 'whatsapp-bot-client'
+  }),
+  puppeteer: {
+    headless: true,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-accelerated-2d-canvas',
+      '--no-first-run',
+      '--no-zygote',
+      '--disable-gpu',
+      '--disable-blink-features=AutomationControlled'
+    ]
+  },
+  // Дополнительные настройки для стабильности
+  restartOnAuthFail: true,
+  takeoverOnConflict: false,
+  takeoverTimeoutMs: 0
+});
+
 // Хранилище для обработки команд (теперь с поддержкой языков)
 const commandHandlers = {
-  '/start': async (msg, language) => {
+  '/start': async (msg, language, client) => {
     const text = getTranslation(language, 'start');
-    await safeReply(msg, text);
+    await sendMessageSafely(msg, text, client);
   },
   
-  '/help': async (msg, language) => {
+  '/help': async (msg, language, client) => {
     const text = getTranslation(language, 'help');
-    await safeReply(msg, text);
+    await sendMessageSafely(msg, text, client);
   },
   
-  '/status': async (msg, language) => {
+  '/status': async (msg, language, client) => {
     try {
       const info = await msg.getChat();
       const statusText = getTranslation(language, 'status');
-      await safeReply(msg, `${statusText}\n\nЧат: ${info.name || info.id.user || msg.from}`);
+      await sendMessageSafely(msg, `${statusText}\n\nЧат: ${info.name || info.id.user || msg.from}`, client);
     } catch (error) {
       console.error('Ошибка проверки статуса:', error);
       const statusText = getTranslation(language, 'status');
-      await safeReply(msg, statusText);
+      await sendMessageSafely(msg, statusText, client);
     }
   },
   
-  '/time': async (msg, language) => {
+  '/time': async (msg, language, client) => {
     try {
       const now = new Date();
       // Определяем часовой пояс по стране
@@ -88,7 +139,7 @@ const commandHandlers = {
       const response = `${timeText} ${timeString}`;
       
       // Используем безопасный метод отправки
-      await safeReply(msg, response);
+      await sendMessageSafely(msg, response, client);
     } catch (error) {
       console.error('Ошибка в команде /time:', error);
       throw error;
@@ -127,6 +178,17 @@ client.on('qr', (qr) => {
 client.on('ready', () => {
   console.log('✅ Бот готов к работе!');
   console.log('📱 WhatsApp бот запущен и готов получать сообщения');
+  // Сбрасываем все счетчики при успешном подключении
+  reconnectAttempts = 0;
+  isReconnecting = false;
+  disconnectCount = 0;
+  lastReconnectTime = 0;
+  lastDisconnectTime = 0;
+  logoutHandled = false;
+  if (logoutTimeout) {
+    clearTimeout(logoutTimeout);
+    logoutTimeout = null;
+  }
 });
 
 // Обработка авторизации
@@ -137,24 +199,314 @@ client.on('authenticated', () => {
 // Обработка ошибок авторизации
 client.on('auth_failure', (msg) => {
   console.error('❌ Ошибка авторизации:', msg);
+  console.log('💡 Попробуйте:');
+  console.log('   1. Удалить папку .wwebjs_auth');
+  console.log('   2. Перезапустить бота');
+  console.log('   3. Отсканировать QR-код заново');
 });
+
+// Флаги и счетчики для управления переподключениями
+let isReconnecting = false;
+let reconnectAttempts = 0;
+const MAX_RECONNECT_ATTEMPTS = 5;
+let lastReconnectTime = 0;
+const MIN_RECONNECT_INTERVAL = 60000; // Минимум 60 секунд между переподключениями
+let lastDisconnectTime = 0;
+let disconnectCount = 0;
+const MAX_DISCONNECTS_PER_MINUTE = 3; // Максимум 3 отключения в минуту
+let logoutHandled = false; // Флаг для предотвращения множественной обработки LOGOUT
+let logoutTimeout = null; // Таймер для обработки LOGOUT
+
+// Функция переподключения
+async function reconnectClient() {
+  if (isReconnecting) {
+    console.log('⚠️ Переподключение уже выполняется, пропускаем...');
+    return;
+  }
+
+  // Проверяем минимальный интервал
+  const now = Date.now();
+  const timeSinceLastReconnect = now - lastReconnectTime;
+  if (timeSinceLastReconnect < MIN_RECONNECT_INTERVAL) {
+    const waitTime = Math.ceil((MIN_RECONNECT_INTERVAL - timeSinceLastReconnect) / 1000);
+    console.log(`⏳ Слишком рано для переподключения. Ждем ${waitTime} секунд...`);
+    setTimeout(() => {
+      reconnectClient();
+    }, MIN_RECONNECT_INTERVAL - timeSinceLastReconnect);
+    return;
+  }
+
+  isReconnecting = true;
+  reconnectAttempts++;
+  lastReconnectTime = Date.now();
+
+  if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
+    console.error('❌ Превышено максимальное количество попыток переподключения');
+    console.log('💡 Попробуйте перезапустить бота вручную');
+    console.log('💡 Это поможет избежать частых переподключений, которые могут вызвать LOGOUT');
+    isReconnecting = false;
+    return;
+  }
+
+  // Экспоненциальная задержка: 10, 20, 40, 80, 160 секунд
+  const delay = Math.min(10000 * Math.pow(2, reconnectAttempts - 1), 160000);
+  console.log(`🔄 Попытка переподключения ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS}...`);
+  console.log(`⏳ Задержка перед переподключением: ${delay / 1000} секунд`);
+  
+  await new Promise(resolve => setTimeout(resolve, delay));
+  
+  try {
+    // Проверяем, не инициализирован ли уже клиент
+    try {
+      const state = await client.getState();
+      if (state === 'CONNECTED' || state === 'OPENING') {
+        console.log('✅ Клиент уже подключен или подключается, отменяем переподключение');
+        isReconnecting = false;
+        reconnectAttempts = 0;
+        return;
+      }
+    } catch (stateError) {
+      // Игнорируем ошибки проверки состояния
+    }
+    
+    // Пытаемся безопасно закрыть клиент
+    try {
+      await client.destroy();
+      console.log('✅ Клиент успешно закрыт');
+      // Ждем освобождения ресурсов
+      await new Promise(resolve => setTimeout(resolve, 5000));
+    } catch (destroyError) {
+      // Игнорируем ошибки при destroy (файлы могут быть заблокированы)
+      console.log('⚠️ Предупреждение при закрытии клиента (можно игнорировать):', destroyError.message);
+      // Все равно ждем немного
+      await new Promise(resolve => setTimeout(resolve, 5000));
+    }
+    
+    console.log('🔄 Инициализация клиента заново...');
+    await client.initialize();
+    
+    isReconnecting = false;
+    reconnectAttempts = 0; // Сбрасываем счетчик при успешном подключении
+    disconnectCount = 0; // Сбрасываем счетчик отключений
+  } catch (error) {
+    console.error('❌ Ошибка переподключения:', error.message);
+    isReconnecting = false;
+    
+    // Экспоненциальная задержка перед следующей попыткой
+    const retryDelay = Math.min(15000 * Math.pow(2, reconnectAttempts - 1), 300000);
+    console.log(`⏳ Повторная попытка через ${retryDelay / 1000} секунд...`);
+    setTimeout(() => {
+      reconnectClient();
+    }, retryDelay);
+  }
+}
 
 // Обработка отключения
 client.on('disconnected', (reason) => {
+  const now = Date.now();
   console.log('⚠️ Бот отключен:', reason);
+  
+  // Проверяем частоту отключений
+  if (now - lastDisconnectTime < 60000) {
+    disconnectCount++;
+  } else {
+    disconnectCount = 1;
+  }
+  lastDisconnectTime = now;
+  
+  // Если слишком много отключений за короткое время - не переподключаемся автоматически
+  if (disconnectCount > MAX_DISCONNECTS_PER_MINUTE) {
+    console.error('❌ Слишком много отключений за короткое время!');
+    console.log('💡 Автоматическое переподключение отключено для предотвращения LOGOUT');
+    console.log('💡 Рекомендуется:');
+    console.log('   1. Подождать несколько минут');
+    console.log('   2. Проверить интернет-соединение');
+    console.log('   3. Перезапустить бота вручную');
+    return;
+  }
+  
+  // Проверяем минимальный интервал между переподключениями
+  const timeSinceLastReconnect = now - lastReconnectTime;
+  if (timeSinceLastReconnect < MIN_RECONNECT_INTERVAL) {
+    const waitTime = Math.ceil((MIN_RECONNECT_INTERVAL - timeSinceLastReconnect) / 1000);
+    console.log(`⏳ Слишком рано для переподключения. Ждем ${waitTime} секунд...`);
+    setTimeout(() => {
+      handleDisconnect(reason);
+    }, MIN_RECONNECT_INTERVAL - timeSinceLastReconnect);
+    return;
+  }
+  
+  handleDisconnect(reason);
 });
+
+// Функция обработки отключения
+function handleDisconnect(reason) {
+  if (reason === 'LOGOUT') {
+    // Предотвращаем множественную обработку LOGOUT
+    if (logoutHandled) {
+      console.log('⚠️ LOGOUT уже обрабатывается, пропускаем...');
+      return;
+    }
+    
+    logoutHandled = true;
+    console.log('⚠️ Обнаружен LOGOUT - требуется повторная авторизация');
+    console.log('💡 Если это происходит часто, возможно:');
+    console.log('   - WhatsApp разлогинивает из-за подозрительной активности');
+    console.log('   - Проблемы с сохранением сессии');
+    console.log('   - Нужно удалить папку .wwebjs_auth и авторизоваться заново');
+    
+    // При LOGOUT не пытаемся автоматически переподключаться
+    console.log('⏳ При LOGOUT автоматическое переподключение отключено');
+    console.log('💡 Рекомендуется:');
+    console.log('   1. Подождать 1-2 минуты');
+    console.log('   2. Перезапустить бота вручную (Ctrl+C, затем npm start)');
+    console.log('   3. Или удалить папку .wwebjs_auth и авторизоваться заново');
+    
+    // Очищаем таймеры переподключения
+    if (logoutTimeout) {
+      clearTimeout(logoutTimeout);
+    }
+    
+    // Пробуем переинициализировать через 2 минуты (только один раз)
+    logoutTimeout = setTimeout(() => {
+      console.log('🔄 Попытка переинициализации после LOGOUT...');
+      reconnectClientAfterLogout();
+    }, 120000); // Ждем 2 минуты
+  } else {
+    // Для других причин отключения пытаемся переподключиться с задержкой
+    console.log('🔄 Пытаемся переподключиться через 15 секунд...');
+    setTimeout(() => {
+      reconnectClient();
+    }, 15000);
+  }
+}
+
+// Специальная функция для переподключения после LOGOUT
+async function reconnectClientAfterLogout() {
+  if (isReconnecting) {
+    console.log('⚠️ Переподключение уже выполняется, пропускаем...');
+    return;
+  }
+
+  isReconnecting = true;
+  reconnectAttempts++;
+  lastReconnectTime = Date.now();
+
+  if (reconnectAttempts > 2) {
+    // После LOGOUT делаем максимум 2 попытки
+    console.error('❌ Превышено максимальное количество попыток переподключения после LOGOUT');
+    console.log('💡 Рекомендуется:');
+    console.log('   1. Остановить бота (Ctrl+C)');
+    console.log('   2. Подождать 5-10 минут');
+    console.log('   3. Удалить папку .wwebjs_auth');
+    console.log('   4. Запустить бота заново: npm start');
+    isReconnecting = false;
+    logoutHandled = false; // Разблокируем для следующего LOGOUT
+    return;
+  }
+
+  console.log(`🔄 Попытка переподключения после LOGOUT ${reconnectAttempts}/2...`);
+  console.log('⏳ Ожидание освобождения ресурсов (30 секунд)...');
+  
+  // Ждем достаточно долго, чтобы файлы освободились
+  await new Promise(resolve => setTimeout(resolve, 30000));
+  
+  try {
+    // Проверяем состояние клиента
+    try {
+      const state = await client.getState();
+      if (state === 'CONNECTED' || state === 'OPENING') {
+        console.log('✅ Клиент уже подключен или подключается');
+        isReconnecting = false;
+        reconnectAttempts = 0;
+        logoutHandled = false;
+        return;
+      }
+    } catch (stateError) {
+      // Игнорируем ошибки проверки состояния
+    }
+    
+    // Пытаемся безопасно закрыть клиент, но игнорируем ошибки
+    try {
+      await client.destroy();
+      console.log('✅ Клиент закрыт');
+      await new Promise(resolve => setTimeout(resolve, 10000)); // Ждем еще 10 секунд
+    } catch (destroyError) {
+      // Игнорируем ошибки при destroy
+      console.log('⚠️ Предупреждение при закрытии (можно игнорировать)');
+      await new Promise(resolve => setTimeout(resolve, 10000));
+    }
+    
+    console.log('🔄 Переинициализация клиента...');
+    // При LOGOUT просто переинициализируем - библиотека сама обработает сессию
+    await client.initialize();
+    
+    isReconnecting = false;
+    reconnectAttempts = 0;
+    disconnectCount = 0;
+    logoutHandled = false; // Разблокируем для следующего LOGOUT
+  } catch (error) {
+    console.error('❌ Ошибка переподключения:', error.message);
+    
+    // Если ошибка связана с заблокированными файлами - прекращаем попытки
+    if (error.message.includes('EBUSY') || error.message.includes('locked') || 
+        error.message.includes('ENOENT') || error.stack?.includes('LocalAuth')) {
+      console.log('💡 Обнаружена проблема с файлами сессии');
+      console.log('💡 Рекомендуется:');
+      console.log('   1. Остановить бота (Ctrl+C)');
+      console.log('   2. Подождать 1-2 минуты');
+      console.log('   3. Удалить папку .wwebjs_auth');
+      console.log('   4. Запустить бота заново: npm start');
+      isReconnecting = false;
+      logoutHandled = false;
+      return;
+    }
+    
+    isReconnecting = false;
+    logoutHandled = false;
+    
+    // Больше не пытаемся автоматически - просим пользователя перезапустить
+    console.log('💡 Автоматическое переподключение после LOGOUT не удалось');
+    console.log('💡 Пожалуйста, перезапустите бота вручную');
+  }
+}
 
 // Обработка входящих сообщений
 client.on('message', async (msg) => {
   try {
     // Пропускаем сообщения от самого бота
-    if (msg.from === 'status@broadcast') {
+    if (msg.fromMe) {
       return;
     }
 
-    // Пропускаем каналы (@lid) - whatsapp-web.js не поддерживает отправку в каналы
-    if (msg.from.includes('@lid')) {
-      console.log(`⚠️ Пропущено сообщение из канала (не поддерживается): ${msg.from}`);
+    // Пропускаем статусы и broadcast сообщения
+    if (msg.from === 'status@broadcast' || msg.from.includes('@broadcast')) {
+      return;
+    }
+
+    // Получаем информацию о чате для проверки типа
+    let chat;
+    try {
+      chat = await msg.getChat();
+    } catch (chatError) {
+      console.error('❌ Ошибка получения информации о чате:', chatError);
+      return;
+    }
+
+    // Пропускаем сообщения из групп
+    if (chat.isGroup) {
+      console.log(`⚠️ Пропущено сообщение из группы: ${chat.name || chat.id.user}`);
+      return;
+    }
+
+    // Пропускаем сообщения из каналов
+    if (chat.isChannel) {
+      console.log(`⚠️ Пропущено сообщение из канала: ${chat.name || chat.id.user}`);
+      return;
+    }
+
+    // Пропускаем сообщения без текста или с пустым телом
+    if (!msg.body || !msg.body.trim()) {
       return;
     }
 
@@ -173,7 +525,7 @@ client.on('message', async (msg) => {
     if (commandHandlers[trimmedMessage]) {
       // Выполняем команду с учетом языка пользователя
       console.log(`⚡ Выполнение команды: ${trimmedMessage} (язык: ${userLanguage})`);
-      await commandHandlers[trimmedMessage](msg, userLanguage);
+      await commandHandlers[trimmedMessage](msg, userLanguage, client);
       console.log(`✅ Команда ${trimmedMessage} выполнена успешно`);
     } else {
       // Эхо-ответ на языке пользователя
@@ -181,26 +533,15 @@ client.on('message', async (msg) => {
       const echoText = getTranslation(userLanguage, 'echo');
       const useHelpText = getTranslation(userLanguage, 'useHelp');
       const response = `${echoText} "${messageText}"\n\n${useHelpText}`;
-      await safeReply(msg, response);
+      await sendMessageSafely(msg, response, client);
       console.log(`✅ Сообщение отправлено успешно`);
     }
   } catch (error) {
     console.error('❌ Ошибка обработки сообщения:', error);
+    console.error('Детали ошибки:', error.message);
+    console.error('Стек ошибки:', error.stack);
     
-    try {
-      // Определяем язык для сообщения об ошибке
-      const userLanguage = getLanguageFromPhone(msg.from);
-      const errorText = getTranslation(userLanguage, 'error');
-      await safeReply(msg, errorText);
-    } catch (replyError) {
-      console.error('❌ Ошибка отправки ответа об ошибке:', replyError);
-      // Последняя попытка - через client.sendMessage напрямую
-      try {
-        await client.sendMessage(msg.from, '❌ Произошла ошибка. Попробуйте позже.');
-      } catch (finalError) {
-        console.error('❌ Критическая ошибка отправки сообщения:', finalError);
-      }
-    }
+    // Не пытаемся отправлять ответ об ошибке, чтобы избежать зацикливания
   }
 });
 
