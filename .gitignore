@@ -1,8 +1,6 @@
 node_modules/
-.env
 .DS_Store
 *.log
 .vscode/
 .idea/
-.wwebjs_auth/
-.wwebjs_cache/
+
