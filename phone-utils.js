@@ -44,10 +44,12 @@ const translations = {
 /help - Показать справку
 /status - Проверить состояние бота
 /time - Текущее время
+/site - Перейти на сайт SellYourBrick
 
 Просто напишите мне любое сообщение, и я отвечу!`,
     status: '✅ Бот работает! Статус: готов к работе',
     time: '🕐 Текущее время:',
+    site: '🌐 Наш официальный сайт SellYourBrick, где вы можете посмотреть все объявления недвижимости:',
     echo: 'Вы написали:',
     useHelp: 'Используйте /help для списка команд.',
     error: '❌ Произошла ошибка при обработке сообщения. Попробуйте еще раз.'
@@ -59,10 +61,12 @@ const translations = {
 /help - Mostrar ayuda
 /status - Verificar el estado del bot
 /time - Hora actual
+/site - Ir al sitio web de SellYourBrick
 
 ¡Simplemente escríbeme cualquier mensaje y responderé!`,
     status: '✅ ¡El bot está funcionando! Estado: listo para trabajar',
     time: '🕐 Hora actual:',
+    site: '🌐 Nuestro sitio web oficial de SellYourBrick, donde puedes ver todos los anuncios de propiedades:',
     echo: 'Escribiste:',
     useHelp: 'Usa /help para ver la lista de comandos.',
     error: '❌ Ocurrió un error al procesar el mensaje. Inténtalo de nuevo.'
@@ -74,10 +78,12 @@ const translations = {
 /help - Show help
 /status - Check bot status
 /time - Current time
+/site - Go to SellYourBrick website
 
 Just write me any message and I will reply!`,
     status: '✅ Bot is working! Status: ready to work',
     time: '🕐 Current time:',
+    site: '🌐 Our official SellYourBrick website, where you can view all property listings:',
     echo: 'You wrote:',
     useHelp: 'Use /help for a list of commands.',
     error: '❌ An error occurred while processing the message. Please try again.'
@@ -89,10 +95,12 @@ Just write me any message and I will reply!`,
 /help - Hilfe anzeigen
 /status - Bot-Status überprüfen
 /time - Aktuelle Zeit
+/site - Zur SellYourBrick-Website gehen
 
 Schreibe mir einfach eine Nachricht und ich werde antworten!`,
     status: '✅ Bot funktioniert! Status: bereit zum Arbeiten',
     time: '🕐 Aktuelle Zeit:',
+    site: '🌐 Unsere offizielle SellYourBrick-Website, auf der Sie alle Immobilienangebote ansehen können:',
     echo: 'Du hast geschrieben:',
     useHelp: 'Verwende /help für eine Liste der Befehle.',
     error: '❌ Beim Verarbeiten der Nachricht ist ein Fehler aufgetreten. Bitte versuche es erneut.'
@@ -104,10 +112,12 @@ Schreibe mir einfach eine Nachricht und ich werde antworten!`,
 /help - Afficher l'aide
 /status - Vérifier l'état du bot
 /time - Heure actuelle
+/site - Aller sur le site web SellYourBrick
 
 Écrivez-moi simplement un message et je répondrai!`,
     status: '✅ Le bot fonctionne! Statut: prêt à travailler',
     time: '🕐 Heure actuelle:',
+    site: '🌐 Notre site web officiel SellYourBrick, où vous pouvez voir toutes les annonces immobilières:',
     echo: 'Vous avez écrit:',
     useHelp: 'Utilisez /help pour voir la liste des commandes.',
     error: '❌ Une erreur s\'est produite lors du traitement du message. Veuillez réessayer.'
@@ -119,10 +129,12 @@ Schreibe mir einfach eine Nachricht und ich werde antworten!`,
 /help - Mostrare aiuto
 /status - Verificare lo stato del bot
 /time - Ora attuale
+/site - Vai al sito web SellYourBrick
 
 Scrivimi semplicemente un messaggio e risponderò!`,
     status: '✅ Il bot funziona! Stato: pronto per lavorare',
     time: '🕐 Ora attuale:',
+    site: '🌐 Il nostro sito web ufficiale SellYourBrick, dove puoi vedere tutti gli annunci immobiliari:',
     echo: 'Hai scritto:',
     useHelp: 'Usa /help per vedere l\'elenco dei comandi.',
     error: '❌ Si è verificato un errore durante l\'elaborazione del messaggio. Riprova.'
@@ -134,10 +146,12 @@ Scrivimi semplicemente un messaggio e risponderò!`,
 /help - Mostrar ajuda
 /status - Verificar o status do bot
 /time - Hora atual
+/site - Ir ao site SellYourBrick
 
 Apenas me escreva uma mensagem e eu responderei!`,
     status: '✅ O bot está funcionando! Status: pronto para trabalhar',
     time: '🕐 Hora atual:',
+    site: '🌐 Nosso site oficial SellYourBrick, onde você pode ver todos os anúncios de imóveis:',
     echo: 'Você escreveu:',
     useHelp: 'Use /help para ver a lista de comandos.',
     error: '❌ Ocorreu um erro ao processar a mensagem. Tente novamente.'
@@ -149,10 +163,12 @@ Apenas me escreva uma mensagem e eu responderei!`,
 /help - Pokaż pomoc
 /status - Sprawdź status bota
 /time - Aktualny czas
+/site - Przejdź do strony SellYourBrick
 
 Po prostu napisz mi wiadomość, a odpowiem!`,
     status: '✅ Bot działa! Status: gotowy do pracy',
     time: '🕐 Aktualny czas:',
+    site: '🌐 Nasza oficjalna strona SellYourBrick, gdzie możesz zobaczyć wszystkie ogłoszenia nieruchomości:',
     echo: 'Napisałeś:',
     useHelp: 'Użyj /help, aby zobaczyć listę poleceń.',
     error: '❌ Wystąpił błąd podczas przetwarzania wiadomości. Spróbuj ponownie.'
@@ -164,10 +180,12 @@ Po prostu napisz mi wiadomość, a odpowiem!`,
 /help - Yardım göster
 /status - Bot durumunu kontrol et
 /time - Mevcut saat
+/site - SellYourBrick web sitesine git
 
 Sadece bana bir mesaj yaz ve cevap vereceğim!`,
     status: '✅ Bot çalışıyor! Durum: çalışmaya hazır',
     time: '🕐 Mevcut saat:',
+    site: '🌐 Tüm emlak ilanlarını görebileceğiniz resmi SellYourBrick web sitemiz:',
     echo: 'Yazdın:',
     useHelp: 'Komut listesini görmek için /help kullanın.',
     error: '❌ Mesaj işlenirken bir hata oluştu. Lütfen tekrar deneyin.'
@@ -179,10 +197,12 @@ Sadece bana bir mesaj yaz ve cevap vereceğim!`,
 /help - Показати довідку
 /status - Перевірити стан бота
 /time - Поточний час
+/site - Перейти на сайт SellYourBrick
 
 Просто напишіть мені будь-яке повідомлення, і я відповім!`,
     status: '✅ Бот працює! Стан: готовий до роботи',
     time: '🕐 Поточний час:',
+    site: '🌐 Наш офіційний сайт SellYourBrick, де ви можете переглянути всі оголошення нерухомості:',
     echo: 'Ви написали:',
     useHelp: 'Використовуйте /help для списку команд.',
     error: '❌ Сталася помилка при обробці повідомлення. Спробуйте ще раз.'

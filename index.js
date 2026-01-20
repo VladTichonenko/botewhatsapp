@@ -1,6 +1,24 @@
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
+const axios = require('axios');
+const express = require('express');
+const cors = require('cors');
 const { getLanguageFromPhone, getTranslation, getCountryFromPhone } = require('./phone-utils');
+const { askAI } = require('./ai-service');
+const { detectLanguageFromText, getLanguageName } = require('./language-detector');
+
+// URL сервера для сохранения WhatsApp пользователей
+const SERVER_URL = process.env.SERVER_URL || 'http://localhost:3000';
+
+// Создаем Express сервер для API
+const app = express();
+const BOT_PORT = process.env.BOT_PORT || 3001;
+
+app.use(cors());
+app.use(express.json());
+
+// Флаг готовности бота
+let botReady = false;
 
 // Безопасная отправка сообщений с обработкой ошибок markedUnread
 async function sendMessageSafely(msg, text, client) {
@@ -98,6 +116,79 @@ const client = new Client({
   takeoverTimeoutMs: 0
 });
 
+// Хранилище истории сообщений для каждого пользователя
+// Формат: { chatId: [{ sender: 'user'|'assistant', text: string, timestamp: number }] }
+const conversationHistory = new Map();
+
+// Хранилище для отслеживания первого сообщения от каждого пользователя
+const firstMessageUsers = new Set();
+
+// Максимальное количество сообщений в истории (чтобы не перегружать контекст)
+const MAX_HISTORY_LENGTH = 20;
+
+// Функция для добавления сообщения в историю
+function addToHistory(chatId, sender, text) {
+  if (!conversationHistory.has(chatId)) {
+    conversationHistory.set(chatId, []);
+  }
+  
+  const history = conversationHistory.get(chatId);
+  history.push({
+    sender: sender,
+    text: text,
+    timestamp: Date.now()
+  });
+  
+  // Ограничиваем размер истории
+  if (history.length > MAX_HISTORY_LENGTH) {
+    history.shift(); // Удаляем самое старое сообщение
+  }
+}
+
+// Функция для получения истории разговора
+function getHistory(chatId) {
+  return conversationHistory.get(chatId) || [];
+}
+
+// Функция для сохранения WhatsApp пользователя в базу данных
+async function saveWhatsAppUser(chatId, contact, country, language) {
+  try {
+    // Очищаем номер телефона от @c.us
+    const phoneNumberClean = chatId.replace('@c.us', '').replace('@g.us', '');
+    
+    // Получаем имя из контакта
+    let firstName = '';
+    let lastName = '';
+    
+    if (contact) {
+      const pushName = contact.pushname || contact.name || '';
+      const nameParts = pushName.split(' ');
+      firstName = nameParts[0] || '';
+      lastName = nameParts.slice(1).join(' ') || '';
+    }
+
+    const languageName = getLanguageName(language);
+    const countryInfo = country ? `, страна: ${country}` : '';
+
+    // Отправляем данные на сервер
+    await axios.post(`${SERVER_URL}/api/whatsapp/users`, {
+      phone_number: chatId,
+      phone_number_clean: phoneNumberClean,
+      first_name: firstName,
+      last_name: lastName,
+      country: country || null,
+      language: language || 'ru'
+    }, {
+      timeout: 5000 // 5 секунд таймаут
+    });
+
+    console.log(`✅ WhatsApp пользователь сохранен: ${chatId} | Имя: ${firstName} ${lastName} | Язык: ${languageName} (${language})${countryInfo}`);
+  } catch (error) {
+    // Не критичная ошибка, просто логируем
+    console.warn(`⚠️ Не удалось сохранить WhatsApp пользователя ${chatId}:`, error.message);
+  }
+}
+
 // Хранилище для обработки команд (теперь с поддержкой языков)
 const commandHandlers = {
   '/start': async (msg, language, client) => {
@@ -145,6 +236,13 @@ const commandHandlers = {
       throw error;
     }
   },
+  
+  '/site': async (msg, language, client) => {
+    const siteText = getTranslation(language, 'site');
+    const siteUrl = 'https://sellyourbrickai.netlify.app/';
+    const response = `${siteText}\n\n${siteUrl}`;
+    await sendMessageSafely(msg, response, client);
+  },
 };
 
 // Функция для определения часового пояса по стране
@@ -178,6 +276,7 @@ client.on('qr', (qr) => {
 client.on('ready', () => {
   console.log('✅ Бот готов к работе!');
   console.log('📱 WhatsApp бот запущен и готов получать сообщения');
+  botReady = true;
   // Сбрасываем все счетчики при успешном подключении
   reconnectAttempts = 0;
   isReconnecting = false;
@@ -513,11 +612,40 @@ client.on('message', async (msg) => {
     const messageText = msg.body.trim();
     const chatId = msg.from;
     
-    // Определяем язык пользователя по номеру телефона
-    const userLanguage = getLanguageFromPhone(chatId);
+    // Проверяем, это первое сообщение от пользователя?
+    const isFirstMessage = !firstMessageUsers.has(chatId);
+    
+    // Определяем язык пользователя
+    let userLanguage;
+    if (isFirstMessage) {
+      // Для первого сообщения определяем язык из текста
+      userLanguage = detectLanguageFromText(messageText);
+      const languageName = getLanguageName(userLanguage);
+      console.log(`🌍 Первое сообщение от ${chatId} - определен язык из текста: ${languageName} (${userLanguage})`);
+      firstMessageUsers.add(chatId);
+    } else {
+      // Для последующих сообщений используем язык по номеру телефона
+      userLanguage = getLanguageFromPhone(chatId);
+    }
+    
     const userCountry = getCountryFromPhone(chatId);
     
-    console.log(`📨 Получено сообщение от ${chatId} (${userCountry || 'неизвестно'}, язык: ${userLanguage}): ${messageText}`);
+    // Получаем информацию о контакте для сохранения имени
+    let contact = null;
+    try {
+      contact = await msg.getContact();
+    } catch (contactError) {
+      console.warn('⚠️ Не удалось получить информацию о контакте:', contactError.message);
+    }
+    
+    // Сохраняем пользователя в базу данных (асинхронно, не блокируем обработку сообщения)
+    // Для первого сообщения сохраняем язык, определенный из текста
+    saveWhatsAppUser(chatId, contact, userCountry, userLanguage).catch(err => {
+      // Ошибка уже обработана в функции
+    });
+    
+    const languageName = getLanguageName(userLanguage);
+    console.log(`📨 Получено сообщение от ${chatId} (${userCountry || 'неизвестно'}, язык: ${languageName} [${userLanguage}]): ${messageText}`);
 
     // Проверяем, является ли сообщение командой
     const trimmedMessage = messageText.toLowerCase();
@@ -528,13 +656,28 @@ client.on('message', async (msg) => {
       await commandHandlers[trimmedMessage](msg, userLanguage, client);
       console.log(`✅ Команда ${trimmedMessage} выполнена успешно`);
     } else {
-      // Эхо-ответ на языке пользователя
-      console.log(`📤 Отправка эхо-ответа на ${chatId} (язык: ${userLanguage})`);
-      const echoText = getTranslation(userLanguage, 'echo');
-      const useHelpText = getTranslation(userLanguage, 'useHelp');
-      const response = `${echoText} "${messageText}"\n\n${useHelpText}`;
-      await sendMessageSafely(msg, response, client);
-      console.log(`✅ Сообщение отправлено успешно`);
+      // Добавляем сообщение пользователя в историю
+      addToHistory(chatId, 'user', messageText);
+      
+      // Получаем ответ от AI
+      console.log(`🤖 Запрос к AI помощнику для ${chatId} (язык: ${userLanguage})`);
+      try {
+        const history = getHistory(chatId);
+        const aiResponse = await askAI(history, userLanguage);
+        
+        // Добавляем ответ AI в историю
+        addToHistory(chatId, 'assistant', aiResponse);
+        
+        // Отправляем ответ пользователю
+        console.log(`📤 Отправка ответа от AI на ${chatId}`);
+        await sendMessageSafely(msg, aiResponse, client);
+        console.log(`✅ Ответ от AI отправлен успешно`);
+      } catch (aiError) {
+        console.error('❌ Ошибка при запросе к AI:', aiError);
+        // В случае ошибки отправляем сообщение об ошибке
+        const errorText = getTranslation(userLanguage, 'error');
+        await sendMessageSafely(msg, errorText, client);
+      }
     }
   } catch (error) {
     console.error('❌ Ошибка обработки сообщения:', error);
@@ -548,6 +691,134 @@ client.on('message', async (msg) => {
 // Обработка ошибок
 client.on('error', (error) => {
   console.error('❌ Ошибка клиента:', error);
+});
+
+// ========== API ENDPOINTS ==========
+
+/**
+ * GET /api/status - Проверка статуса бота
+ */
+app.get('/api/status', (req, res) => {
+  res.json({
+    success: true,
+    ready: botReady,
+    message: botReady 
+      ? 'Бот готов к работе' 
+      : 'Бот еще не готов. Дождитесь авторизации.'
+  });
+});
+
+/**
+ * POST /api/broadcast - Рассылка сообщений
+ */
+app.post('/api/broadcast', async (req, res) => {
+  try {
+    const { message, phoneNumbers } = req.body;
+
+    if (!message || !message.trim()) {
+      return res.status(400).json({
+        success: false,
+        error: 'Сообщение не может быть пустым'
+      });
+    }
+
+    if (!phoneNumbers || !Array.isArray(phoneNumbers) || phoneNumbers.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Необходимо выбрать хотя бы одного получателя'
+      });
+    }
+
+    if (!botReady) {
+      return res.status(503).json({
+        success: false,
+        error: 'Бот еще не готов. Дождитесь авторизации.'
+      });
+    }
+
+    const results = {
+      total: phoneNumbers.length,
+      sent: 0,
+      failed: 0,
+      errors: []
+    };
+
+    // Отправляем сообщения с задержкой между отправками
+    const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+    const DELAY_BETWEEN_MESSAGES = 2000; // 2 секунды между сообщениями
+
+    for (let i = 0; i < phoneNumbers.length; i++) {
+      const phoneNumber = phoneNumbers[i];
+      
+      try {
+        // Форматируем номер телефона
+        let chatId = phoneNumber;
+        
+        // Если номер не содержит @c.us, добавляем его
+        if (!chatId.includes('@')) {
+          const digits = String(phoneNumber).replace(/\D/g, '');
+          if (!digits) {
+            results.failed++;
+            results.errors.push({
+              phone: phoneNumber,
+              error: 'Неверный формат номера телефона'
+            });
+            continue;
+          }
+          chatId = `${digits}@c.us`;
+        }
+
+        // Отправляем сообщение через безопасный метод
+        try {
+          // Создаем объект, имитирующий сообщение для sendMessageSafely
+          const mockMsg = {
+            from: chatId,
+            getChat: async () => await client.getChatById(chatId)
+          };
+          await sendMessageSafely(mockMsg, message, client);
+          results.sent++;
+          console.log(`✅ Сообщение отправлено: ${chatId}`);
+        } catch (sendError) {
+          results.failed++;
+          results.errors.push({
+            phone: phoneNumber,
+            error: sendError.message || 'Ошибка отправки сообщения'
+          });
+          console.error(`❌ Ошибка отправки сообщения ${chatId}:`, sendError.message);
+        }
+
+        // Задержка между сообщениями (кроме последнего)
+        if (i < phoneNumbers.length - 1) {
+          await delay(DELAY_BETWEEN_MESSAGES);
+        }
+      } catch (error) {
+        results.failed++;
+        results.errors.push({
+          phone: phoneNumber,
+          error: error.message || 'Неизвестная ошибка'
+        });
+        console.error(`❌ Ошибка обработки номера ${phoneNumber}:`, error.message);
+      }
+    }
+
+    return res.json({
+      success: true,
+      message: `Рассылка завершена. Отправлено: ${results.sent}, Ошибок: ${results.failed}`,
+      results
+    });
+  } catch (error) {
+    console.error('Ошибка рассылки сообщений:', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Не удалось выполнить рассылку'
+    });
+  }
+});
+
+// Запускаем HTTP сервер
+app.listen(BOT_PORT, () => {
+  console.log(`🌐 API сервер бота запущен на порту ${BOT_PORT}`);
+  console.log(`📡 Endpoints: GET /api/status, POST /api/broadcast`);
 });
 
 // Инициализация клиента
