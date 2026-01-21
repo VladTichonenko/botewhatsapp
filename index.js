@@ -6,6 +6,7 @@ const cors = require('cors');
 const { getLanguageFromPhone, getTranslation, getCountryFromPhone } = require('./phone-utils');
 const { askAI } = require('./ai-service');
 const { detectLanguageFromText, getLanguageName } = require('./language-detector');
+const { translateText } = require('./translate-service');
 
 // URL сервера для сохранения WhatsApp пользователей
 const SERVER_URL = process.env.SERVER_URL || 'http://localhost:3000';
@@ -640,9 +641,12 @@ client.on('message', async (msg) => {
     
     // Сохраняем пользователя в базу данных (асинхронно, не блокируем обработку сообщения)
     // Для первого сообщения сохраняем язык, определенный из текста
-    saveWhatsAppUser(chatId, contact, userCountry, userLanguage).catch(err => {
-      // Ошибка уже обработана в функции
-    });
+    // Важно: сохраняем язык сразу, чтобы он не потерялся
+    if (isFirstMessage) {
+      saveWhatsAppUser(chatId, contact, userCountry, userLanguage).catch(err => {
+        // Ошибка уже обработана в функции
+      });
+    }
     
     const languageName = getLanguageName(userLanguage);
     console.log(`📨 Получено сообщение от ${chatId} (${userCountry || 'неизвестно'}, язык: ${languageName} [${userLanguage}]): ${messageText}`);
@@ -768,6 +772,55 @@ app.post('/api/broadcast', async (req, res) => {
           chatId = `${digits}@c.us`;
         }
 
+        // Получаем язык пользователя из базы данных
+        let userLanguage = 'ru'; // По умолчанию русский
+        try {
+          // Пытаемся найти пользователя по номеру телефона
+          const cleanPhone = chatId.replace('@c.us', '').replace('@g.us', '');
+          
+          // Пробуем найти пользователя через поиск
+          const userResponse = await axios.get(`${SERVER_URL}/api/whatsapp/users?search=${encodeURIComponent(cleanPhone)}`, {
+            timeout: 5000
+          });
+          
+          if (userResponse.data && userResponse.data.success && userResponse.data.data && userResponse.data.data.length > 0) {
+            // Ищем пользователя по полному номеру или чистому номеру
+            const user = userResponse.data.data.find(u => {
+              const userPhoneFull = u.phoneFull || '';
+              const userPhone = u.phone || '';
+              return userPhoneFull === chatId || 
+                     userPhone === cleanPhone || 
+                     userPhoneFull.includes(cleanPhone) ||
+                     userPhone.includes(cleanPhone) ||
+                     userPhoneFull.replace(/\D/g, '') === cleanPhone.replace(/\D/g, '') ||
+                     userPhone.replace(/\D/g, '') === cleanPhone.replace(/\D/g, '');
+            });
+            
+            if (user && user.language) {
+              userLanguage = user.language;
+              console.log(`🌍 Язык пользователя ${chatId}: ${getLanguageName(userLanguage)} (${userLanguage})`);
+            } else {
+              console.log(`ℹ️ Пользователь ${chatId} найден, но язык не указан, используем по умолчанию: ru`);
+            }
+          } else {
+            console.log(`ℹ️ Пользователь ${chatId} не найден в БД, используем язык по умолчанию: ru`);
+          }
+        } catch (langError) {
+          console.warn(`⚠️ Не удалось получить язык пользователя ${chatId}, используем по умолчанию:`, langError.message);
+        }
+
+        // Переводим сообщение на язык пользователя
+        let messageToSend = message;
+        try {
+          messageToSend = await translateText(message, userLanguage);
+          if (messageToSend !== message) {
+            console.log(`🔄 Сообщение переведено на ${getLanguageName(userLanguage)} для ${chatId}`);
+          }
+        } catch (translateError) {
+          console.warn(`⚠️ Ошибка перевода для ${chatId}, отправляем оригинал:`, translateError.message);
+          // При ошибке перевода отправляем оригинальное сообщение
+        }
+
         // Отправляем сообщение через безопасный метод
         try {
           // Создаем объект, имитирующий сообщение для sendMessageSafely
@@ -775,9 +828,9 @@ app.post('/api/broadcast', async (req, res) => {
             from: chatId,
             getChat: async () => await client.getChatById(chatId)
           };
-          await sendMessageSafely(mockMsg, message, client);
+          await sendMessageSafely(mockMsg, messageToSend, client);
           results.sent++;
-          console.log(`✅ Сообщение отправлено: ${chatId}`);
+          console.log(`✅ Сообщение отправлено на ${getLanguageName(userLanguage)}: ${chatId}`);
         } catch (sendError) {
           results.failed++;
           results.errors.push({

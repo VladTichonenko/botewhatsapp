@@ -34,6 +34,17 @@ function detectLanguageFromText(text) {
     return 'ru';
   }
   
+  // СНАЧАЛА проверяем испанский по диакритике (это самый надежный признак)
+  if (/[ñáéíóúüÑÁÉÍÓÚÜ]/i.test(text)) {
+    // Если есть испанские диакритики, это точно испанский
+    return 'es';
+  }
+  
+  // Затем проверяем немецкий по диакритике
+  if (/[äöüßÄÖÜ]/i.test(text)) {
+    return 'de';
+  }
+  
   // Подсчитываем совпадения для каждого языка
   const englishMatches = englishKeywords.filter(keyword => lowerText.includes(keyword)).length;
   const spanishMatches = spanishKeywords.filter(keyword => lowerText.includes(keyword)).length;
@@ -50,23 +61,31 @@ function detectLanguageFromText(text) {
   
   // Если есть явные совпадения, возвращаем язык с наибольшим количеством
   if (matches[0].count > 0) {
+    // Если испанский имеет хотя бы одно совпадение, приоритет ему (часто испанский без диакритики)
+    if (spanishMatches > 0 && matches[0].lang === 'en' && englishMatches === spanishMatches) {
+      return 'es'; // При равном количестве приоритет испанскому
+    }
     return matches[0].lang;
   }
   
   // Если совпадений нет, проверяем общие паттерны
-  // Английский - латиница без диакритики
-  if (/^[a-z\s\d\.,!?\-]+$/i.test(text)) {
-    return 'en';
-  }
-  
-  // Испанский - может содержать ñ, á, é, í, ó, ú
-  if (/[ñáéíóúü]/i.test(text)) {
+  // Испанские слова часто заканчиваются на -ción, -sión, -mente, -dad, -ción
+  if (/\b\w*(cion|sion|mente|dad|tad|ncia|ncia)\b/i.test(text)) {
     return 'es';
   }
   
-  // Немецкий - может содержать ä, ö, ü, ß
-  if (/[äöüß]/i.test(text)) {
-    return 'de';
+  // Английский - латиница без диакритики (но только если нет испанских признаков)
+  if (/^[a-z\s\d\.,!?\-]+$/i.test(text)) {
+    // Дополнительная проверка: испанские артикли и предлоги
+    const spanishCommonWords = ['el', 'la', 'los', 'las', 'un', 'una', 'de', 'del', 'en', 'con', 'por', 'para', 'es', 'son', 'está', 'están'];
+    const hasSpanishCommonWords = spanishCommonWords.some(word => {
+      const regex = new RegExp(`\\b${word}\\b`, 'i');
+      return regex.test(text);
+    });
+    if (hasSpanishCommonWords) {
+      return 'es';
+    }
+    return 'en';
   }
   
   // По умолчанию русский
