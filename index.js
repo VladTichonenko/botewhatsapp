@@ -373,10 +373,14 @@ client.on('ready', async () => {
         }
         
         // Проверяем ВСЕ личные чаты, а не только первые 5
+        let totalMessagesChecked = 0;
+        let newMessagesFound = 0;
+        
         for (const chat of personalChats) {
           try {
-            // Получаем последние 5 сообщений для более надежной проверки
-            const messages = await chat.fetchMessages({ limit: 5 });
+            // Получаем последние 10 сообщений для более надежной проверки
+            const messages = await chat.fetchMessages({ limit: 10 });
+            totalMessagesChecked += messages.length;
             
             if (messages.length > 0) {
               // Проверяем все сообщения, начиная с самого нового
@@ -389,7 +393,7 @@ client.on('ready', async () => {
                 
                 // Проверяем, не обработали ли мы уже это сообщение
                 if (!processedMessageIds.has(msgId)) {
-                  // Проверяем, не слишком ли старое сообщение (больше 5 минут)
+                  // Проверяем, не слишком ли старое сообщение (увеличено до 15 минут)
                   // timestamp может быть в секундах или миллисекундах
                   let msgTime = msg.timestamp;
                   if (msgTime < 1000000000000) {
@@ -399,27 +403,40 @@ client.on('ready', async () => {
                   const now = Date.now();
                   const age = now - msgTime;
                   
-                  // Обрабатываем только сообщения не старше 5 минут
-                  if (age < 300000) { // 5 минут = 300000 мс
+                  // Обрабатываем только сообщения не старше 15 минут (увеличено с 5 минут)
+                  if (age < 900000) { // 15 минут = 900000 мс
                     processedMessageIds.add(msgId);
+                    newMessagesFound++;
                     console.log('📨 [POLLING] Найдено новое сообщение через polling:', {
                       from: msg.from,
                       body: msg.body ? (msg.body.length > 50 ? msg.body.substring(0, 50) + '...' : msg.body) : '(нет текста)',
                       age: Math.round(age / 1000) + ' сек назад',
-                      id: msgId.substring(0, 20) + '...'
+                      id: msgId.substring(0, 20) + '...',
+                      timestamp: new Date(msgTime).toISOString()
                     });
                     handleIncomingMessage(msg);
+                  } else {
+                    // Логируем старые сообщения для отладки (только раз в 20 циклов)
+                    if (pollingCounter % 20 === 0) {
+                      console.log(`⏭️ [POLLING] Пропущено старое сообщение (${Math.round(age / 60000)} мин назад) от ${msg.from}`);
+                    }
                   }
+                } else {
+                  // Сообщение уже обработано - это нормально
                 }
               }
             }
           } catch (msgError) {
-            // Игнорируем ошибки получения сообщений из отдельных чатов
-            // Логируем только если это не таймаут (чтобы не спамить)
-            if (!msgError.message?.includes('timeout') && !msgError.message?.includes('Timeout')) {
-              // Тихие ошибки для отдельных чатов - это нормально
+            // Логируем ошибки получения сообщений из отдельных чатов для отладки
+            if (pollingCounter % 20 === 0) {
+              console.warn(`⚠️ [POLLING] Ошибка получения сообщений из чата:`, msgError.message?.substring(0, 100));
             }
           }
+        }
+        
+        // Логируем статистику каждые 20 циклов
+        if (pollingCounter % 20 === 0) {
+          console.log(`📊 [POLLING] Статистика: проверено ${totalMessagesChecked} сообщений, найдено новых: ${newMessagesFound}, обработано ранее: ${processedMessageIds.size}`);
         }
       } catch (pollError) {
         // Обрабатываем ошибки таймаута отдельно
@@ -893,10 +910,11 @@ async function handleIncomingMessage(msg) {
       return;
     }
     
-    console.log('✅ [DEBUG] Сообщение прошло все проверки, начинаем обработку...');
-
     const messageText = msg.body.trim();
     const chatId = msg.from;
+    
+    console.log('✅ [DEBUG] Сообщение прошло все проверки, начинаем обработку...');
+    console.log(`🔍 [DEBUG] Обработка сообщения от ${chatId}: "${messageText.substring(0, 100)}${messageText.length > 100 ? '...' : ''}"`);
     
     // Проверяем, это первое сообщение от пользователя?
     const isFirstMessage = !firstMessageUsers.has(chatId);
