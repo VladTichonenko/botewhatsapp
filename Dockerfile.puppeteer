@@ -1,0 +1,24 @@
+# Альтернативный Dockerfile с готовым образом Puppeteer
+# Используйте этот файл, если основной Dockerfile не работает
+# Переименуйте его в Dockerfile или укажите в Railway
+
+FROM ghcr.io/puppeteer/puppeteer:21.6.1
+
+# Создаем рабочую директорию
+WORKDIR /app
+
+# Копируем package.json и package-lock.json
+COPY package*.json ./
+
+# Устанавливаем зависимости
+RUN npm ci --only=production
+
+# Копируем остальные файлы
+COPY . .
+
+# Открываем порт
+EXPOSE 3001
+
+# Запускаем приложение
+CMD ["node", "index.js"]
+
