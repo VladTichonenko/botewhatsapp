@@ -357,6 +357,26 @@ client.on('ready', async () => {
     const pollingInterval = setInterval(async () => {
       if (!botReady) return;
       
+      // Проверяем, что client существует и готов
+      if (!client) {
+        console.warn('⚠️ [POLLING] Client не определен, пропускаем цикл');
+        return;
+      }
+      
+      // Проверяем состояние клиента перед использованием
+      try {
+        const state = await client.getState();
+        if (state !== 'CONNECTED') {
+          if (pollingCounter % 20 === 0) {
+            console.log(`⏸️ [POLLING] Клиент не подключен (состояние: ${state}), пропускаем цикл`);
+          }
+          return;
+        }
+      } catch (stateError) {
+        console.warn('⚠️ [POLLING] Ошибка проверки состояния клиента:', stateError.message);
+        return;
+      }
+      
       pollingCounter++;
       // Логируем каждые 20 циклов (примерно раз в минуту), что polling работает
       if (pollingCounter % 20 === 0) {
@@ -439,17 +459,43 @@ client.on('ready', async () => {
           console.log(`📊 [POLLING] Статистика: проверено ${totalMessagesChecked} сообщений, найдено новых: ${newMessagesFound}, обработано ранее: ${processedMessageIds.size}`);
         }
       } catch (pollError) {
-        // Обрабатываем ошибки таймаута отдельно
-        if (pollError.message?.includes('timeout') || pollError.message?.includes('Timeout') || 
-            pollError.message?.includes('protocolTimeout') || pollError.message?.includes('Runtime.callFunctionOn')) {
+        // Обрабатываем разные типы ошибок
+        const errorMsg = pollError.message || pollError.toString() || 'Неизвестная ошибка';
+        
+        // Ошибка "Cannot read properties of undefined" - client не определен
+        if (errorMsg.includes('Cannot read properties') && errorMsg.includes('undefined')) {
+          console.warn('⚠️ [POLLING] Client не определен или недоступен. Проверяем состояние...');
+          // Проверяем состояние клиента
+          try {
+            if (client) {
+              const state = await client.getState();
+              console.log(`📊 [POLLING] Состояние клиента: ${state}`);
+              if (state !== 'CONNECTED') {
+                console.warn('⚠️ [POLLING] Клиент не подключен, пропускаем цикл');
+              }
+            } else {
+              console.error('❌ [POLLING] Client объект отсутствует!');
+            }
+          } catch (stateError) {
+            console.error('❌ [POLLING] Не удалось проверить состояние клиента:', stateError.message);
+          }
+          return; // Пропускаем этот цикл
+        }
+        
+        // Ошибки таймаута
+        if (errorMsg.includes('timeout') || errorMsg.includes('Timeout') || 
+            errorMsg.includes('protocolTimeout') || errorMsg.includes('Runtime.callFunctionOn')) {
           // Это ошибка таймаута - не критично, просто пропускаем этот цикл
-          // Уже увеличили protocolTimeout, так что это должно редко происходить
           if (pollingCounter % 10 === 0) {
             console.log('⏱️ [POLLING] Таймаут при опросе (это нормально при медленных операциях)');
           }
         } else {
           // Другие ошибки логируем
-          console.warn('⚠️ Ошибка polling:', pollError.message);
+          console.warn('⚠️ [POLLING] Ошибка опроса:', errorMsg);
+          // Логируем полную ошибку только раз в 20 циклов, чтобы не спамить
+          if (pollingCounter % 20 === 0 && pollError.stack) {
+            console.warn('📋 [POLLING] Детали ошибки:', pollError.stack.substring(0, 200));
+          }
         }
       }
     }, 3000); // Проверяем каждые 3 секунды для более быстрой реакции
