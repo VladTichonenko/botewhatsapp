@@ -1,0 +1,20 @@
+# Конфигурация для serverless платформ (Railway, Render, Fly.io)
+service: whatsapp-bot
+
+provider:
+  name: nodejs
+  runtime: nodejs18
+  memorySize: 512
+  timeout: 300
+
+functions:
+  api:
+    handler: index.js
+    events:
+      - http:
+          path: /
+          method: ANY
+      - http:
+          path: /{proxy+}
+          method: ANY
+

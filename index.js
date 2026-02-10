@@ -1,3 +1,6 @@
+// Загружаем переменные окружения из .env файла
+require('dotenv').config();
+
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const axios = require('axios');
@@ -13,7 +16,8 @@ const SERVER_URL = process.env.SERVER_URL || 'http://localhost:3000';
 
 // Создаем Express сервер для API
 const app = express();
-const BOT_PORT = process.env.BOT_PORT || 3001;
+// Порт берем из переменной окружения или используем PORT (для платформ типа Railway/Render)
+const BOT_PORT = process.env.PORT || process.env.BOT_PORT || 3001;
 
 app.use(cors());
 app.use(express.json());
@@ -996,13 +1000,56 @@ debugEvents.forEach(eventName => {
 /**
  * GET /api/status - Проверка статуса бота
  */
-app.get('/api/status', (req, res) => {
+app.get('/api/status', async (req, res) => {
+  try {
+    let clientState = 'UNKNOWN';
+    try {
+      clientState = await client.getState();
+    } catch (error) {
+      // Игнорируем ошибки получения состояния
+    }
+    
+    res.json({
+      success: true,
+      ready: botReady,
+      state: clientState,
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+      message: botReady 
+        ? 'Бот готов к работе' 
+        : 'Бот еще не готов. Дождитесь авторизации.'
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/health - Health check endpoint для keep-alive
+ */
+app.get('/api/health', (req, res) => {
+  res.status(200).json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime()
+  });
+});
+
+/**
+ * GET / - Корневой endpoint для проверки работы сервера
+ */
+app.get('/', (req, res) => {
   res.json({
-    success: true,
-    ready: botReady,
-    message: botReady 
-      ? 'Бот готов к работе' 
-      : 'Бот еще не готов. Дождитесь авторизации.'
+    service: 'WhatsApp Bot',
+    status: 'running',
+    endpoints: {
+      status: '/api/status',
+      health: '/api/health',
+      broadcast: 'POST /api/broadcast'
+    }
   });
 });
 
@@ -1165,7 +1212,48 @@ app.post('/api/broadcast', async (req, res) => {
 // Запускаем HTTP сервер
 app.listen(BOT_PORT, () => {
   console.log(`🌐 API сервер бота запущен на порту ${BOT_PORT}`);
-  console.log(`📡 Endpoints: GET /api/status, POST /api/broadcast`);
+  console.log(`📡 Endpoints: GET /, GET /api/status, GET /api/health, POST /api/broadcast`);
+  
+  // Keep-alive механизм: периодически делаем запросы к себе
+  // Это предотвращает "засыпание" на serverless платформах
+  // Ждем 5 секунд перед первым запросом, чтобы сервер точно запустился
+  setTimeout(() => {
+    const keepAliveInterval = setInterval(async () => {
+      try {
+        // Делаем внутренний запрос к health endpoint
+        const response = await axios.get(`http://localhost:${BOT_PORT}/api/health`, {
+          timeout: 5000
+        });
+        console.log(`💓 [KEEP-ALIVE] Health check: ${response.data.status} (uptime: ${Math.floor(process.uptime())}s)`);
+      } catch (error) {
+        // Игнорируем ошибки keep-alive, чтобы не засорять логи
+        // Это нормально, если сервер еще не полностью запустился
+        // Логируем только раз в 10 попыток, чтобы не спамить
+        if (Math.random() < 0.1) {
+          console.log(`⚠️ [KEEP-ALIVE] Health check failed (это нормально при старте): ${error.message}`);
+        }
+      }
+    }, 30000); // Каждые 30 секунд
+    
+    // Сохраняем interval ID для возможной очистки
+    global.keepAliveInterval = keepAliveInterval;
+    
+    // Очищаем интервал при завершении процесса
+    process.on('SIGINT', () => {
+      clearInterval(keepAliveInterval);
+    });
+    process.on('SIGTERM', () => {
+      clearInterval(keepAliveInterval);
+    });
+  }, 5000); // Задержка 5 секунд перед первым запросом
+  
+  // Очищаем интервал при завершении процесса
+  process.on('SIGINT', () => {
+    clearInterval(keepAliveInterval);
+  });
+  process.on('SIGTERM', () => {
+    clearInterval(keepAliveInterval);
+  });
 });
 
 // Инициализация клиента
