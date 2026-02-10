@@ -43,15 +43,15 @@ WORKDIR /app
 # Копируем package.json и package-lock.json
 COPY package*.json ./
 
-# Устанавливаем зависимости
-RUN npm ci --only=production
+# Устанавливаем зависимости (включая dev для правильной работы Puppeteer)
+RUN npm ci
 
 # Копируем остальные файлы
 COPY . .
 
 # Устанавливаем переменные окружения для Puppeteer
+# Puppeteer сам скачает Chrome в свой кеш, не нужно указывать путь
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=false
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
 ENV DISPLAY=:99
 
 # Открываем порт
