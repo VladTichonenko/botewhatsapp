@@ -113,7 +113,10 @@ const client = new Client({
       '--no-zygote',
       '--disable-gpu',
       '--disable-blink-features=AutomationControlled'
-    ]
+    ],
+    // Увеличиваем таймауты для стабильной работы на серверах
+    protocolTimeout: 300000, // 5 минут (300000 мс) для операций Puppeteer
+    timeout: 60000 // 60 секунд для запуска браузера
   },
   // Дополнительные настройки для стабильности
   restartOnAuthFail: true,
@@ -412,10 +415,25 @@ client.on('ready', async () => {
             }
           } catch (msgError) {
             // Игнорируем ошибки получения сообщений из отдельных чатов
+            // Логируем только если это не таймаут (чтобы не спамить)
+            if (!msgError.message?.includes('timeout') && !msgError.message?.includes('Timeout')) {
+              // Тихие ошибки для отдельных чатов - это нормально
+            }
           }
         }
       } catch (pollError) {
-        console.warn('⚠️ Ошибка polling:', pollError.message);
+        // Обрабатываем ошибки таймаута отдельно
+        if (pollError.message?.includes('timeout') || pollError.message?.includes('Timeout') || 
+            pollError.message?.includes('protocolTimeout') || pollError.message?.includes('Runtime.callFunctionOn')) {
+          // Это ошибка таймаута - не критично, просто пропускаем этот цикл
+          // Уже увеличили protocolTimeout, так что это должно редко происходить
+          if (pollingCounter % 10 === 0) {
+            console.log('⏱️ [POLLING] Таймаут при опросе (это нормально при медленных операциях)');
+          }
+        } else {
+          // Другие ошибки логируем
+          console.warn('⚠️ Ошибка polling:', pollError.message);
+        }
       }
     }, 3000); // Проверяем каждые 3 секунды для более быстрой реакции
     
