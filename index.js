@@ -349,11 +349,18 @@ client.on('ready', async () => {
     console.log('   npm install whatsapp-web.js@1.23.0');
     console.log('🔄 Включен polling как основной способ получения сообщений (каждые 3 секунды)...');
     
+    // Проверяем, не запущен ли уже polling
+    if (global.pollingInterval) {
+      console.log('⚠️ Polling уже запущен, очищаем старый интервал...');
+      clearInterval(global.pollingInterval);
+    }
+    
     // Хранилище для последних проверенных сообщений по чатам
     const lastCheckedMessages = new Map();
     
     // Основной polling цикл
     let pollingCounter = 0;
+    console.log('🚀 [POLLING] Запуск polling интервала...');
     const pollingInterval = setInterval(async () => {
       if (!botReady) return;
       
@@ -378,6 +385,12 @@ client.on('ready', async () => {
       }
       
       pollingCounter++;
+      
+      // Логируем первые несколько циклов для подтверждения работы
+      if (pollingCounter <= 3) {
+        console.log(`🔄 [POLLING] Polling работает! Цикл ${pollingCounter}`);
+      }
+      
       // Логируем каждые 20 циклов (примерно раз в минуту), что polling работает
       if (pollingCounter % 20 === 0) {
         console.log(`🔄 [POLLING] Проверка сообщений (цикл ${pollingCounter})...`);
@@ -501,9 +514,8 @@ client.on('ready', async () => {
     }, 3000); // Проверяем каждые 3 секунды для более быстрой реакции
     
     // Сохраняем interval ID для возможной очистки
-    if (typeof global.pollingInterval === 'undefined') {
-      global.pollingInterval = pollingInterval;
-    }
+    global.pollingInterval = pollingInterval;
+    console.log('✅ [POLLING] Polling интервал успешно запущен и сохранен (ID:', pollingInterval.toString().substring(0, 20) + '...)');
     
     // Дополнительная проверка через 5 секунд - возможно, нужно время на синхронизацию
     setTimeout(async () => {
